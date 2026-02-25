@@ -2,13 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from resnet import BasicBlock, Bottleneck, ResNet 
-
 
 class EAAE(nn.Module):
-    def __init__(self,im_x,im_y, hidden_dim, latent_dim,input_dim, modes1, modes2,batchsize, device):
+    def __init__(self,batchsize,device, im_x=28, im_y=28, hidden_dim=8, latent_dim=10, input_dim=3,output_dim=10, modes1=14, modes2=8):
+        
         super(EAAE, self).__init__()
-        self.input_dim = input_dim # 5   # since there are 5 material dims
         self.device = device
         self.im_x = im_x
         self.im_y = im_y
@@ -16,58 +14,165 @@ class EAAE(nn.Module):
         self.latent_dim = latent_dim
         self.modes1 = modes1
         self.modes2 = modes2
-        decoder_im_x = 32
-        decoder_im_y = 32
+        output_im_x = 50
+        output_im_y = 50
 
-        self.Encoder = FNO_Encoder(input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim,im_x=im_x, im_y=im_y,modes1=self.modes1,modes2=self.modes2)
-        self.Decoder = FreqFNO_Decoder(batchsize, device, hidden_dim = hidden_dim, latent_dim=latent_dim//2,output_dim=latent_dim, decoder_im_x=decoder_im_x, decoder_im_y=decoder_im_y,modes1=self.modes1,modes2=self.modes2)
+        self.Encoder = FNO_Encoder(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim,im_x=im_x, im_y=im_y,modes1=modes1,modes2=modes2)
+        self.Decoder = FreqFNO_Decoder(batchsize, device, input_dim = input_dim,output_dim=output_dim,hidden_dim = hidden_dim, latent_dim=latent_dim//2, im_x=im_x, im_y=im_y, output_im_x=output_im_x, output_im_y=output_im_y, modes1=modes1,modes2=modes2)
+    def forward(self, x,feature):
+        mid_value, sph_err_encoder = self.Encoder(x)
+        z = self.Encoder.reparameterization(mid_value,sph_err_encoder)
+        mid_value_decoder, sph_err_decoder = self.Decoder(z,feature)
+        return mid_value, sph_err_encoder, mid_value_decoder, sph_err_decoder
 
-    def forward(self, x, mid_value):
-        z, var = self.Encoder(x)
-        z_complex = self.Encoder.reparameterization(z,var)
-        sph_err = self.Decoder(z_complex, mid_value)
-        return sph_err+var
 
-class FNO_Encoder(nn.Module):
-    def __init__(self,input_dim, hidden_dim, latent_dim,im_x,im_y,modes1, modes2):
-        super(FNO_Encoder, self).__init__()
+class FL_Encoder(nn.Module):
+        def __init__(self,num_properties, input_dim, hidden_dim, latent_dim):
+            super(FL_Encoder, self).__init__()
+            self.FC_input = nn.Linear(input_dim, hidden_dim)
+            self.FC_input2 = nn.Linear(hidden_dim, hidden_dim)
+            self.FC_mean  = nn.Linear(hidden_dim, latent_dim)
+            self.FC_var   = nn.Linear (hidden_dim, latent_dim-num_properties)
+            self.LeakyReLU = nn.LeakyReLU(0.2)
+            self.training = True
+            self.input_dim = input_dim
+            self.num_properties = num_properties
+        def forward(self, x):
+            x = x.view(-1, self.input_dim)
+            h_       = self.LeakyReLU(self.FC_input(x))
+            h_       = self.LeakyReLU(self.FC_input2(h_))
+            mean     = self.FC_mean(h_)
+            log_var  = self.FC_var(h_)                                                                
+            return mean, log_var
+        
+class FL_Decoder(nn.Module):
+    def __init__(self, latent_dim, hidden_dim, output_dim):
+        super(FL_Decoder, self).__init__()
+        self.FC_hidden = nn.Linear(latent_dim, hidden_dim)
+        self.FC_hidden2 = nn.Linear(hidden_dim, hidden_dim)
+        self.FC_output = nn.Linear(hidden_dim, output_dim)
+        self.LeakyReLU = nn.LeakyReLU(0.2)
+        
+    def forward(self, x):
+        h     = self.LeakyReLU(self.FC_hidden(x))
+        h     = self.LeakyReLU(self.FC_hidden2(h))
+        x_hat = torch.sigmoid(self.FC_output(h))
+        return x_hat
+    
+class CNN_Encoder(nn.Module):
+        def __init__(self,device, num_properties, input_dim, hidden_dim, latent_dim,im_x,im_y):
+            super(CNN_Encoder, self).__init__()
+            self.conv1 = nn.Conv2d(input_dim, hidden_dim, kernel_size=(3, 3), stride=1, padding=1)
+            self.conv2 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=(3, 3), stride=1, padding=1)
+            self.maxpool = nn.MaxPool2d(kernel_size=(2, 2)) ## half spatial dimension 
+            self.conv3 = nn.Conv2d(hidden_dim, hidden_dim*2, kernel_size=(3, 3), stride=1, padding=1)
+            self.conv4 = nn.Conv2d(hidden_dim*2, hidden_dim*2, kernel_size=(3, 3), stride=1, padding=1)
+            self.conv5 = nn.Conv2d(hidden_dim*2, hidden_dim*2, kernel_size=(3, 3), stride=1, padding=1)
+            self.flatten = nn.Flatten()
+            self.dense1 = nn.Linear(im_x*im_y*hidden_dim//2, hidden_dim)
+            self.layer_mean = nn.Linear(hidden_dim, latent_dim)
+            self.layer_variance = nn.Linear(hidden_dim, latent_dim)
+            self.LeakyReLU = nn.LeakyReLU(0.2)
+            self.im_x = im_x
+            self.im_y = im_y
+            self.num_properties = num_properties
+            self.device = device
+
+        def forward(self, x):
+            x = x.view(-1,1,self.im_x,self.im_y)
+            h_ = self.LeakyReLU(self.conv1(x))
+            h_ = self.LeakyReLU(self.conv2(h_))
+            h_ = self.maxpool(h_)
+            h_ = self.LeakyReLU(self.conv3(h_))
+            h_ = self.LeakyReLU(self.conv4(h_))
+            h_ = self.LeakyReLU(self.conv5(h_))
+            h_ = self.flatten(h_)
+            h_ = self.LeakyReLU(self.dense1(h_))
+            mean     = self.layer_mean(h_)
+            log_var  = self.layer_variance(h_)                                                                           
+            return mean, log_var 
+
+        def reparameterization(self, mean, log_var):
+            epsilon = torch.randn_like(log_var).to(self.device)
+            mean += torch.exp(0.5 * log_var) * epsilon
+            z = mean
+            return z
+                                                                                         
+class CNN_Decoder(nn.Module):
+    def __init__(self, num_properties, latent_dim, hidden_dim, output_dim,im_x,im_y):
+        super(CNN_Decoder, self).__init__()
+
+        self.dense1 = nn.Linear(latent_dim, im_x*im_y*2)
+        self.dense2 = nn.Linear(im_x*im_y*2,im_x*im_y*hidden_dim//2)
+
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear')
+        self.conv1 = nn.Conv2d(hidden_dim*2, hidden_dim, kernel_size=(3, 3), stride=1, padding=1)
+        self.conv2 = nn.Conv2d(hidden_dim, 1, kernel_size=(3, 3), stride=1, padding=1)
+
+        self.LeakyReLU = nn.LeakyReLU(0.2)
+        self.hidden_dim = hidden_dim
+        self.im_x = im_x
+        self.im_y = im_y
+
+        self.property_pred1 = nn.Linear(latent_dim, hidden_dim)
+        self.property_pred2 = nn.Linear(hidden_dim, hidden_dim)
+        self.property_pred3 = nn.Linear(hidden_dim, num_properties)
+
+    def forward(self, x):
+        h = self.LeakyReLU(self.dense1(x))
+        h = self.LeakyReLU(self.dense2(h))
+        h = h.view(-1,self.hidden_dim*2,self.im_x//2,self.im_y//2)
+        h = self.upsample(h)
+        h = self.LeakyReLU(self.conv1(h))
+        x_hat = torch.sigmoid(self.conv2(h))
+
+        p = self.LeakyReLU(self.property_pred1(x))
+        p = self.LeakyReLU(self.property_pred2(p))
+        p = self.property_pred3(p)
+        mid_value = p[:,:,None,None]
+        return x_hat, mid_value, None
+    
+    def to_device(self, device):
+        pass
+
+class Spherical_FNO_Encoder(nn.Module):
+    def __init__(self,batchsize,device, num_properties,input_dim, hidden_dim, latent_dim,im_x,im_y,modes1, modes2):
+        super(Spherical_FNO_Encoder, self).__init__()
         self.modes1 = modes1
         self.modes2 = modes2
         self.im_x = im_x
         self.im_y = im_y
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
-        self.input_dim = input_dim
+        self.num_properties = num_properties
         self.activation_function = nn.LeakyReLU(0.2)
-        self.p = MLP(self.input_dim+2, self.hidden_dim, self.hidden_dim*2) # output channel is 1: u(x, y)
-        self.conv0 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
-        self.conv1 = SpectralConv2d(self.hidden_dim, self.latent_dim, self.modes1, self.modes2)
-        self.conv2 = SpectralConv2d(self.latent_dim, self.latent_dim, self.modes1, self.modes2)
+        #self.p = nn.Linear(3, self.hidden_dim) # input channel is 3: (a(x, y), x, y)
+        self.conv0 = SpectralConv2d(3, self.hidden_dim, self.modes1, self.modes2)
+        self.conv1 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
+        self.conv2 = SpectralConv2d(self.hidden_dim, self.latent_dim, self.modes1, self.modes2)
         self.conv3 = SpectralConv2d(self.latent_dim, self.latent_dim, self.modes1, self.modes2)
         self.conv4 = SpectralConv2d(self.latent_dim, self.latent_dim, self.modes1, self.modes2)
         self.conv5 = SpectralConv2d(self.latent_dim, self.latent_dim, self.modes1, self.modes2)
         self.mlp0 = MLP(self.hidden_dim, self.hidden_dim, self.hidden_dim)
-        self.mlp1 = MLP(self.latent_dim, self.latent_dim, self.latent_dim)
+        self.mlp1 = MLP(self.hidden_dim, self.hidden_dim, self.hidden_dim)
         self.mlp2 = MLP(self.latent_dim, self.latent_dim, self.latent_dim)
         self.mlp3 = MLP(self.latent_dim, self.latent_dim, self.latent_dim)
         self.mlp4 = MLP(self.latent_dim, self.latent_dim, self.latent_dim)
         self.mlp5 = MLP(self.latent_dim, self.latent_dim, self.latent_dim)
         self.w0 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
-        self.w1 = nn.Conv2d(self.hidden_dim, self.latent_dim, 1)
-        self.w2 = nn.Conv2d(self.latent_dim, self.latent_dim, 1)
+        self.w1 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
+        self.w2 = nn.Conv2d(self.hidden_dim, self.latent_dim, 1)
         self.w3 = nn.Conv2d(self.latent_dim, self.latent_dim, 1)
         self.w4 = nn.Conv2d(self.latent_dim, self.latent_dim, 1)
         self.w5 = nn.Conv2d(self.latent_dim, self.latent_dim, 1)
-        self.q = MLP(self.latent_dim, self.latent_dim, self.latent_dim)
+        self.x_grid, self.y_grid, self.dx, self.dy = self.get_spherical_grid(batchsize, latent_dim, im_x, im_y, device)
 
     def forward(self, x):
-        x = x.view(-1,self.input_dim, self.im_x,self.im_y)
+        x = x.view(-1,self.im_x,self.im_y,1)
         grid = self.get_grid(x.shape, x.device)
-        grid = grid.permute(0, 3, 1, 2)
-        #print(f"Grid shape: {grid.shape}")
-        x = torch.cat((x, grid), dim=1)
-        #print("x shape: {}".format(x.shape))
-        x = self.activation_function(self.p(x))
+        x = torch.cat((x, grid), dim=-1)
+        # x = self.activation_function(self.p(x))
+        x = x.permute(0, 3, 1, 2)
 
         x1 = self.conv0(x)
         x1 = self.mlp0(x1)
@@ -80,6 +185,7 @@ class FNO_Encoder(nn.Module):
         x2 = self.w1(x)
         x = x1 + x2
         x = self.activation_function(x)
+
         x1 = self.conv2(x)
         x1 = self.mlp2(x1)
         x2 = self.w2(x)
@@ -102,50 +208,352 @@ class FNO_Encoder(nn.Module):
         x1 = self.mlp5(x1)
         x2 = self.w5(x)
         x = x1 + x2
-        x = self.q(x)
 
-        mean = torch.mean(x,dim=(2,3),keepdim=True)
-        var = torch.var(x,dim=(2,3),keepdim=True)
-        ## print var mean
-        #print(f"Encoder output variance mean: {torch.mean(var).item()}")
-        return mean, var
+        #x = 2*torch.sigmoid(x)-1
+        if self.im_x % 2 ==0:
+            mid_value = (x[:,:,self.im_x//2-1,self.im_x//2] + x[:,:,self.im_x//2,self.im_x//2]+ x[:,:,self.im_x//2-1,self.im_x//2-1] + x[:,:,self.im_x//2,self.im_x//2-1])/4
+        
+        else:
+            mid_value = x[:,:,self.im_x//2,self.im_x//2]
+        mid_value = mid_value[:,:,None,None]
+        mid_value[:,1,:,:] = 0.5*torch.sigmoid(mid_value[:,1,:,:])-0.05
+        sph_err = self._calculate_spherical_error(x,mid_value,self.x_grid,self.y_grid,self.dx,self.dy)
+        return mid_value, sph_err
     
     def get_grid(self, shape, device):
-        batchsize, size_x, size_y = shape[0], shape[2], shape[3]
+        batchsize, size_x, size_y = shape[0], shape[1], shape[2]
         gridx = torch.tensor(np.linspace(0, 1, size_x), dtype=torch.float)
         gridx = gridx.reshape(1, size_x, 1, 1).repeat([batchsize, 1, size_y, 1])
         gridy = torch.tensor(np.linspace(0, 1, size_y), dtype=torch.float)
         gridy = gridy.reshape(1, 1, size_y, 1).repeat([batchsize, size_x, 1, 1])
-        #print("gridx shape:", gridx.shape)
-        #print("gridy shape:", gridy.shape)
-        return torch.cat((gridx, gridy), dim=-1).to(device)
-    
+        return torch.cat((gridx, gridy), dim=-1).to(device) 
+
+    def get_spherical_grid(self, batchsize, channels, size_x, size_y, device):
+        x_coords = torch.linspace(-1, 1, size_x).to(device)
+        y_coords = torch.linspace(-1, 1, size_y).to(device)
+        l0 = np.sqrt(2*np.sqrt(2)-1)/np.sqrt(2)
+        x_coords = x_coords * l0
+        y_coords = y_coords * l0
+        x_grid, y_grid = torch.meshgrid(x_coords, y_coords, indexing='ij')
+        x_grid = x_grid.unsqueeze(0).unsqueeze(0).repeat(batchsize,channels,1,1)
+        y_grid = y_grid.unsqueeze(0).unsqueeze(0).repeat(batchsize,channels,1,1)
+        dx = x_coords[1]-x_coords[0]
+        dy = y_coords[1]-y_coords[0]
+        return x_grid, y_grid, dx, dy
+
     def reparameterization(self,mean,var):
-        modes1 = self.modes1
-        modes2 = self.modes2
+        modes1 = 10
+        modes2 = 6
         device = mean.device
         latent_dim = mean.shape[1] 
-        #epsilon_real = torch.randn(mean.shape[0], latent_dim//2, modes1, modes2).to(device)* torch.sqrt(var[:,:latent_dim//2,:,:])
-        z_real = mean[:,:latent_dim//2,:,:]# + epsilon_real
-        #epsilon_image = torch.randn(mean.shape[0], latent_dim//2, modes1, modes2).to(device)* torch.sqrt(var[:,latent_dim//2:,:,:])
-        z_image = mean[:,latent_dim//2:,:,:]# + epsilon_image
+        epsilon_real = torch.randn(mean.shape[0], latent_dim//2, modes1, modes2).to(device)* torch.sqrt(var[:,:latent_dim//2,:,:])
+        z_real = mean[:,:latent_dim//2,:,:] + epsilon_real
+        epsilon_image = torch.randn(mean.shape[0], latent_dim//2, modes1, modes2).to(device)* torch.sqrt(var[:,latent_dim//2:,:,:])
+        z_image = mean[:,latent_dim//2:,:,:] + epsilon_image
         z = torch.complex(z_real, z_image)
         return z
     
+    def backup_reparameterization(self, mid_value,batchsize, channels, size_x, size_y,device):
+        ## rebuild the spherical height field from mid_value
+        z0 = 1 - np.sqrt(2)
+        z_grid = torch.sqrt(2 - self.x_grid**2 - self.y_grid**2) + z0
+        z = z_grid*(mid_value+1e-8)
+        return z
+
+    def _calculate_spherical_error(self, x,mid_value,x_grid,y_grid,dx,dy):
+        #batchsize, channels, size_x, size_y = x.shape
+        ## radical error on sphereical surface
+        ## normalize height field
+        small_value_mask = torch.abs(mid_value) < 1e-4
+        # mid_value = mid_value.masked_fill(small_value_mask, 1e-3)
+        x = x/mid_value
+        z0 = 1 - np.sqrt(2)
+        r0_sq = 2
+        K0 = 1/2 
+        ## assume the sphere center is (0,0,1-np.sqrt(2))
+        z_grid = x - z0
+        #z_grid = x - 1 + np.sqrt(2)
+        radius_sq = x_grid**2 + y_grid**2 + z_grid**2
+        radical_error = torch.mean((radius_sq - r0_sq)**2,dim=[2,3],keepdim=True)
+        K = _principal_curvatures_heightfield(z_grid, dx, dy)
+        curvature_err = torch.mean((K[:,:,5:-5,5:-5] - K0)**2,dim=[2,3],keepdim=True)
+        curvature_err = curvature_err.masked_fill(small_value_mask, 0.0)
+        sph_err = radical_error + curvature_err*1e-1
+        # radius = torch.sqrt(torch.mean(radius_sq,dim=[2,3],keepdim=True)/2)
+        return sph_err
+        
+class Spherical_FNO_Decoder(nn.Module):
+    def __init__(self, batchsize, device, latent_dim, hidden_dim, output_dim,im_x,im_y,modes1,modes2):
+        super(Spherical_FNO_Decoder, self).__init__()
+        self.modes1 = modes1
+        self.modes2 = modes2
+        self.im_x = im_x
+        self.im_y = im_y
+        self.hidden_dim = hidden_dim
+        self.latent_dim = latent_dim
+        #self.p = LocalMLP(latent_dim,hidden_dim, self.im_x, self.im_y)
+        #self.p = nn.Linear(latent_dim, self.hidden_dim) 
+        self.p = LocalMLP_Complex(latent_dim,hidden_dim, self.modes1, self.modes2)
+        self.conv0 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
+        self.conv1 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
+        self.conv2 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
+        self.conv3 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
+        self.mlp0 = MLP(self.hidden_dim, self.hidden_dim, self.hidden_dim*2)
+        self.mlp1 = MLP(self.hidden_dim, self.hidden_dim, self.hidden_dim*2)
+        self.mlp2 = MLP(self.hidden_dim, self.hidden_dim, self.hidden_dim*2)
+        self.mlp3 = MLP(self.hidden_dim, self.hidden_dim, self.hidden_dim*2)
+        self.w0 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
+        self.w1 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
+        self.w2 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
+        self.w3 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
+        self.q = MLP(self.hidden_dim, self.latent_dim*2+1, self.hidden_dim*2) # output channel is 1: u(x, y)
+        self.activation_function = nn.LeakyReLU(0.2)
+        self.complex_activation_function = ComplexReLU(0.2)
+
+        self.x_grid, self.y_grid, self.dx, self.dy = self.get_spherical_grid(batchsize, latent_dim*2, im_x, im_y, device)
+
+    def forward(self, x0,output_im_x=50,output_im_y=50):
+        x = self.complex_activation_function(self.p(x0))
+        x = torch.fft.irfft2(x, s=(output_im_x, output_im_y),dim=(-2,-1))
+
+        # x = self.activation_function(self.p(x0))
+        x1 = self.conv0(x)
+        x1 = self.mlp0(x1)
+        x2 = self.w0(x)
+        x = x1 + x2
+        x = self.activation_function(x)
+
+        x1 = self.conv1(x)
+        x1 = self.mlp1(x1)
+        x2 = self.w1(x)
+        x = x1 + x2
+        x = self.activation_function(x)
+
+        x1 = self.conv2(x)
+        x1 = self.mlp2(x1)
+        x2 = self.w2(x)
+        x = x1 + x2
+        x = self.activation_function(x)
+
+        x1 = self.conv3(x)
+        x1 = self.mlp3(x1)
+        x2 = self.w3(x)
+        x = x1 + x2
+        x = self.q(x)
+ 
+        x_hat = x[:,0:1,:,:]
+        x_hat = torch.sigmoid(x_hat)
+        x_hat = x_hat.permute(0, 2, 3, 1)
+
+        x_epi = x[:,1:,:,:]
+        x_epi = 2*torch.sigmoid(x_epi)-1
+        output_im_x = self.im_x
+        if output_im_x % 2 ==0:
+            mid_value = (x_epi[:,:,output_im_x//2-1,output_im_x//2] + x_epi[:,:,output_im_x//2,output_im_x//2]+ x_epi[:,:,output_im_x//2-1,output_im_x//2-1] + x_epi[:,:,output_im_x//2,output_im_x//2-1])/4
+        else:
+            mid_value = x_epi[:,:,output_im_x//2,output_im_x//2]
+        mid_value = mid_value[:,:,None,None]
+        sph_err = self._calculate_spherical_error(x_epi,mid_value,self.x_grid,self.y_grid,self.dx,self.dy)
+        return x_hat,mid_value, sph_err
+
+    def get_spherical_grid(self, batchsize, channels, size_x, size_y, device):
+        x_coords = torch.linspace(-1, 1, size_x).to(device)
+        y_coords = torch.linspace(-1, 1, size_y).to(device)
+        l0 = np.sqrt(2*np.sqrt(3)-1)/np.sqrt(2)
+        x_coords = x_coords * l0
+        y_coords = y_coords * l0
+        x_grid, y_grid = torch.meshgrid(x_coords, y_coords, indexing='ij')
+        x_grid = x_grid.unsqueeze(0).unsqueeze(0).repeat(batchsize,channels,1,1)
+        y_grid = y_grid.unsqueeze(0).unsqueeze(0).repeat(batchsize,channels,1,1)
+        dx = x_coords[1]-x_coords[0]
+        dy = y_coords[1]-y_coords[0]
+        return x_grid, y_grid, dx, dy
+
+    def _calculate_spherical_error(self, x,mid_value,x_grid,y_grid,dx,dy):
+        #batchsize, channels, size_x, size_y = x.shape
+        ## radical error on sphereical surface
+        ## normalize height field
+        z0 = 1 - np.sqrt(3)
+        r0_sq = 3
+        K0 = 1/3
+        small_value_mask = torch.abs(mid_value) < 1e-4
+        # mid_value = mid_value.masked_fill(small_value_mask, 1e-3)
+        x = x/mid_value
+        ## assume the sphere center is (0,0,0)
+        #z_grid = x - 1 + np.sqrt(3)
+        z_grid = x - z0
+        radius_sq = x_grid**2 + y_grid**2 + z_grid**2
+        radical_error = torch.mean((radius_sq - r0_sq)**2,dim=[2,3],keepdim=True)
+        # ## curvature error on spherical surface
+        K = _principal_curvatures_heightfield(z_grid, dx, dy)
+        curvature_err = torch.mean((K[:,:,5:-5,5:-5] - K0)**2,dim=[2,3],keepdim=True)
+        curvature_err = curvature_err.masked_fill(small_value_mask, 0.0)
+        sph_err = radical_error + curvature_err*1e-1
+        return sph_err
+
+class FNO_Encoder(nn.Module):
+    def __init__(self,input_dim, hidden_dim, latent_dim,im_x,im_y,modes1, modes2):
+        super(FNO_Encoder, self).__init__()
+        self.modes1 = modes1
+        self.modes2 = modes2
+        self.im_x = im_x
+        self.im_y = im_y
+        self.hidden_dim = hidden_dim
+        self.latent_dim = latent_dim
+        self.activation_function = nn.LeakyReLU(0.2)
+        self.p = nn.Linear(input_dim, self.hidden_dim) # input channel is 3: (a(x, y), x, y)
+        self.conv0 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
+        self.conv1 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
+        self.conv2 = SpectralConv2d(self.hidden_dim, self.latent_dim, self.modes1, self.modes2)
+        self.conv3 = SpectralConv2d(self.latent_dim, self.latent_dim, self.modes1, self.modes2)
+        self.conv4 = SpectralConv2d(self.latent_dim, self.latent_dim, self.modes1, self.modes2)
+        self.conv5 = SpectralConv2d(self.latent_dim, self.latent_dim, self.modes1, self.modes2)
+        self.mlp0 = MLP(self.hidden_dim, self.hidden_dim, self.hidden_dim*2)
+        self.mlp1 = MLP(self.hidden_dim, self.hidden_dim, self.hidden_dim*2)
+        self.mlp2 = MLP(self.latent_dim, self.latent_dim, self.latent_dim*2)
+        self.mlp3 = MLP(self.latent_dim, self.latent_dim, self.latent_dim*2)
+        self.mlp4 = MLP(self.latent_dim, self.latent_dim, self.latent_dim*2)
+        self.mlp5 = MLP(self.latent_dim, self.latent_dim, self.latent_dim*2)
+        self.w0 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
+        self.w1 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
+        self.w2 = nn.Conv2d(self.hidden_dim, self.latent_dim, 1)
+        self.w3 = nn.Conv2d(self.latent_dim, self.latent_dim, 1)
+        self.w4 = nn.Conv2d(self.latent_dim, self.latent_dim, 1)
+        self.w5 = nn.Conv2d(self.latent_dim, self.latent_dim, 1)
+
+    def forward(self, x):
+        x = x.permute(0, 2, 3, 1)
+        x = self.activation_function(self.p(x))
+        x = x.permute(0, 3, 1, 2)
+
+        x1 = self.conv0(x)
+        x1 = self.mlp0(x1)
+        x2 = self.w0(x)
+        x = x1 + x2
+        x = self.activation_function(x)
+
+        x1 = self.conv1(x)
+        x1 = self.mlp1(x1)
+        x2 = self.w1(x)
+        x = x1 + x2
+        x = self.activation_function(x)
+
+        x1 = self.conv2(x)
+        x1 = self.mlp2(x1)
+        x2 = self.w2(x)
+        x = x1 + x2
+        x = self.activation_function(x)
+
+        x1 = self.conv3(x)
+        x1 = self.mlp3(x1)
+        x2 = self.w3(x)
+        x = x1 + x2
+        x = self.activation_function(x)
+
+        x1 = self.conv4(x)
+        x1 = self.mlp4(x1)
+        x2 = self.w4(x)
+        x = x1 + x2
+        x = self.activation_function(x)
+
+        x1 = self.conv5(x)
+        x1 = self.mlp5(x1)
+        x2 = self.w5(x)
+        x = x1 + x2
+
+        mean = torch.mean(x,dim=(2,3),keepdim=True)
+        var = torch.var(x,dim=(2,3),keepdim=True)
+        return mean, var
+    
+    def get_grid(self, shape, device):
+        batchsize = shape[0]
+        size_x = self.im_x
+        size_y = self.im_y
+        gridx = torch.tensor(np.linspace(0, 1, size_x), dtype=torch.float)
+        gridx = gridx.reshape(1, size_x, 1, 1).repeat([batchsize, 1, size_y, 1])
+        gridy = torch.tensor(np.linspace(0, 1, size_y), dtype=torch.float)
+        gridy = gridy.reshape(1, 1, size_y, 1).repeat([batchsize, size_x, 1, 1])
+        return torch.cat((gridx, gridy), dim=-1).to(device)
+    
+    def reparameterization(self,mean,var):
+        device = mean.device
+        latent_dim = mean.shape[1] 
+        epsilon_real = torch.randn(mean.shape[0], latent_dim//2, self.modes1, self.modes2).to(device)* torch.sqrt(var[:,:latent_dim//2,:,:])
+        z_real = mean[:,:latent_dim//2,:,:] + epsilon_real
+        epsilon_image = torch.randn(mean.shape[0], latent_dim//2, self.modes1, self.modes2).to(device)* torch.sqrt(var[:,latent_dim//2:,:,:])
+        z_image = mean[:,latent_dim//2:,:,:] + epsilon_image
+        z = torch.complex(z_real, z_image)
+        return z
+    
+class FNO_Decoder(nn.Module):
+    def __init__(self, latent_dim, hidden_dim, output_dim,im_x,im_y,modes1,modes2):
+        super(FNO_Decoder, self).__init__()
+        self.modes1 = modes1
+        self.modes2 = modes2
+        self.im_x = im_x
+        self.im_y = im_y
+        self.hidden_dim = hidden_dim
+        self.latent_dim = latent_dim
+        self.p = LocalMLP(latent_dim,hidden_dim, self.im_x, self.im_y)
+        self.conv0 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
+        self.conv1 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
+        self.conv2 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
+        self.conv3 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
+        self.mlp0 = MLP(self.hidden_dim, self.hidden_dim, self.hidden_dim*2)
+        self.mlp1 = MLP(self.hidden_dim, self.hidden_dim, self.hidden_dim*2)
+        self.mlp2 = MLP(self.hidden_dim, self.hidden_dim, self.hidden_dim*2)
+        self.mlp3 = MLP(self.hidden_dim, self.hidden_dim, self.hidden_dim*2)
+        self.w0 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
+        self.w1 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
+        self.w2 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
+        self.w3 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
+        self.q = MLP(self.hidden_dim, 1, self.latent_dim) # output channel is 1: u(x, y)
+        self.LeakyReLU = nn.LeakyReLU(0.2)
+        
+    def forward(self, x):
+        x = self.LeakyReLU(self.p(x))
+        
+        x1 = self.conv0(x)
+        x1 = self.mlp0(x1)
+        x2 = self.w0(x)
+        x = x1 + x2
+        x = self.LeakyReLU(x)
+
+        x1 = self.conv1(x)
+        x1 = self.mlp1(x1)
+        x2 = self.w1(x)
+        x = x1 + x2
+        x = self.LeakyReLU(x)
+
+        x1 = self.conv2(x)
+        x1 = self.mlp2(x1)
+        x2 = self.w2(x)
+        x = x1 + x2
+        x = self.LeakyReLU(x)
+
+        x1 = self.conv3(x)
+        x1 = self.mlp3(x1)
+        x2 = self.w3(x)
+        x = x1 + x2
+        x = self.q(x)
+        x = 1/(1+torch.exp(-32*x))
+        x = x.permute(0, 2, 3, 1)
+
+        return x
+    
 class FreqFNO_Decoder(nn.Module):
-    def __init__(self, batchsize, device,hidden_dim, latent_dim, output_dim,decoder_im_x,decoder_im_y,modes1,modes2):
+    def __init__(self, batchsize, device,input_dim,output_dim, hidden_dim, latent_dim,im_x,im_y,output_im_x,output_im_y,modes1,modes2):
         super(FreqFNO_Decoder, self).__init__()
         self.modes1 = modes1
         self.modes2 = modes2
-        self.batchsize = batchsize
+        self.im_x = im_x
+        self.im_y = im_y
+        self.output_im_x = output_im_x
+        self.output_im_y = output_im_y
+        self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
-        self.output_dim = output_dim
-        self.decoder_im_x = decoder_im_x
-        self.decoder_im_y = decoder_im_y
-        self.device = device
         self.p = LocalMLP_Complex(latent_dim,hidden_dim, self.modes1, self.modes2)
-        #self.p = MLP_Complex(self.latent_dim, self.hidden_dim, self.hidden_dim*2)
         self.conv0 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
         self.conv1 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
         self.conv2 = SpectralConv2d(self.hidden_dim, self.hidden_dim, self.modes1, self.modes2)
@@ -164,10 +572,10 @@ class FreqFNO_Decoder(nn.Module):
         self.w3 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
         self.w4 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
         self.w5 = nn.Conv2d(self.hidden_dim, self.hidden_dim, 1)
-        self.q = MLP(self.hidden_dim, self.output_dim, self.hidden_dim*2) # output channel is 1: u(x, y)
+        self.q = MLP(self.hidden_dim, output_dim, self.hidden_dim*2) # output channel is 1: u(x, y)
         self.complex_activation_function = ComplexReLU(0.2)
         self.LeakyReLU = nn.LeakyReLU(0.2)
-        self.x_grid, self.y_grid, self.dx, self.dy = self.get_spherical_grid(batchsize, output_dim, decoder_im_x, decoder_im_y, device)
+        self.x_grid, self.y_grid, self.dx, self.dy = self.get_spherical_grid(batchsize,output_dim, output_im_x, output_im_x, device)
 
     def to_device(self, device):
         self.x_grid = self.x_grid.to(device)
@@ -175,11 +583,10 @@ class FreqFNO_Decoder(nn.Module):
         self.dx = self.dx.to(device)
         self.dy = self.dy.to(device)
 
-    def forward(self, z, mid_value, output_im_x = 32, output_im_y = 32):
-        current_batchsize = z.shape[0]
-        x = self.complex_activation_function(self.p(z))
+    def forward(self, x,feature):
+        x = self.complex_activation_function(self.p(x))
 
-        x = torch.fft.irfft2(x, s=(output_im_x, output_im_y),dim=(-2,-1))
+        x = torch.fft.irfft2(x, s=(self.output_im_x, self.output_im_y),dim=(-2,-1))
 
         x1 = self.conv0(x)
         x1 = self.mlp0(x1)
@@ -215,23 +622,17 @@ class FreqFNO_Decoder(nn.Module):
         x1 = self.mlp5(x1)
         x2 = self.w5(x)
         x = x1 + x2
-        #x = x.permute(0, 2, 3, 1)
-        #x_epi = torch.sigmoid(self.q(x))*2 - 1
-        #print(f"x shape: {x.shape}")
         x = self.q(x)
         x_epi = x
-        #x_epi = torch.sigmoid(x)*3
-        #x_epi = x_epi.permute(0, 3, 1, 2)
-        #print(f"x_epi shape: {x_epi.shape}")
-        #x_epi = x
-        #mid_value = mid_value[:,:,None,None]
-
-        if current_batchsize != self.batchsize:
-            x_grid, y_grid, dx, dy = self.get_spherical_grid(current_batchsize, self.output_dim, self.decoder_im_x, self.decoder_im_y, self.device)
-            sph_err = self._calculate_spherical_error(x_epi,mid_value,x_grid,y_grid,dx,dy)
+        #x_epi = torch.sigmoid(x_epi)*2-1
+        if self.output_im_x % 2 ==0:
+            mid_value = (x_epi[:,:,self.output_im_x//2-1,self.output_im_x//2] + x_epi[:,:,self.output_im_x//2,self.output_im_x//2]+ x_epi[:,:,self.output_im_x//2-1,self.output_im_x//2-1] + x_epi[:,:,self.output_im_x//2,self.output_im_x//2-1])/4
         else:
-            sph_err = self._calculate_spherical_error(x_epi,mid_value,self.x_grid,self.y_grid,self.dx,self.dy)
-        return sph_err
+            mid_value = x_epi[:,:,self.output_im_x//2,self.output_im_x//2]
+        mid_value = mid_value[:,:,None,None]
+        #sph_err = self._calculate_spherical_error(x_epi,mid_value,self.x_grid,self.y_grid,self.dx,self.dy)
+        sph_err = self._calculate_spherical_error(x_epi,feature,self.x_grid,self.y_grid,self.dx,self.dy)
+        return mid_value, sph_err
 
     def get_spherical_grid(self, batchsize, channels, size_x, size_y, device):
         x_coords = torch.linspace(-1, 1, size_x).to(device)
@@ -253,21 +654,27 @@ class FreqFNO_Decoder(nn.Module):
         z0 = 0
         r0_sq = 1
         K0 = 1
-        small_value_mask = torch.abs(mid_value) < 1e-4
-        # print("x shape: {}".format(x.shape))
-        # print("mid_value shape: {}".format(mid_value.shape))
-        x = x/torch.abs(mid_value)
-        #x = x/mid_value
-        ## assume the sphere center is (0,0,0)
+        # original_sign = torch.sign(mid_value)
+        #small_value_mask = torch.abs(mid_value) < 1e-4
+        # mid_value = mid_value.masked_fill(small_value_mask, 1e-3)
+        # mid_value = torch.abs(mid_value)*original_sign
+        x = x/mid_value
+        #x -= mid_value
+        ## assume the sphere center is (0,0,-sph_r)
         z_grid = x - z0
         ### print tensor device
+        #print("x_grid device: {}, y_grid device: {}, z_grid device: {}".format(x_grid.device, y_grid.device, z_grid.device))
+        # print("x_grid shape:", x_grid.shape)
+        # print("y_grid shape:", y_grid.shape)
+        # print("z_grid shape:", z_grid.shape)
         radius_sq = x_grid**2 + y_grid**2 + z_grid**2
         radical_error = torch.mean((radius_sq - r0_sq)**2,dim=[2,3],keepdim=True)
         # ## curvature error on spherical surface
         K = _principal_curvatures_heightfield(z_grid, dx, dy)
         curvature_err = torch.mean((K[:,:,5:-5,5:-5] - K0)**2,dim=[2,3],keepdim=True)
-        curvature_err = curvature_err.masked_fill(small_value_mask, 0.0)
-        sph_err = radical_error + curvature_err*0.1
+        #curvature_err = curvature_err.masked_fill(small_value_mask, 0.0)
+        #print("radical_error: {}, curvature_err: {}".format(torch.mean(radical_error), torch.mean(curvature_err)))
+        sph_err = radical_error + curvature_err*1e-1
         return sph_err
 
 def _principal_curvatures_heightfield(z_grid,dx,dy):
@@ -348,8 +755,6 @@ class LocalMLP(nn.Module):
     # Complex multiplication
     def compl_mul2d(self, input, weights):
         # (batch, in_channel, x,y ), (in_channel, out_channel, x,y) -> (batch, out_channel, x,y)
-        #print("Input shape in LocalMLP compl_mul2d: {}".format(input.shape))
-        #print("Weights shape in LocalMLP compl_mul2d: {}".format(weights.shape))
         return torch.einsum("bixy,ioxy->boxy", input, weights)
 
     def forward(self, x):
