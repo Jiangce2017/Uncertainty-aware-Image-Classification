@@ -21,7 +21,7 @@ import csv
 from utils import compute_ood_metrics
 
 # from model import get_model, MODELS
-from model import EABlockFNO, EABlockCNN,CompoundModel
+from model import CompoundModel
 from eaae_model import EAAE
 from vae import VAE_CNN
 from resnet import BasicBlock, Bottleneck, ResNet 
@@ -73,7 +73,7 @@ experiment_name = dataset_name+ "_"+ str(hidden_dim) + "_" + str(latent_dim)+"_"
 classification_model_path = Path(os.path.join(models_dir, dataset_name + '_classification.pth'))
 classification_train_outputs_path = Path(os.path.join(data_root, classification_model_name+ "_" + experiment_name + '_classification_train_outputs.npz'))    
 vae_model_path = Path(os.path.join(models_dir, vae_model_name+ "_" + experiment_name + ".pth"))
-uncertainty_model_path = Path(os.path.join(models_dir, uncertainty_model_name+ "_" + experiment_name +"_best.pth"))
+uncertainty_model_path = Path(os.path.join(models_dir, uncertainty_model_name+ "_" + experiment_name +".pth"))
 uncertainty_train_outputs_path = Path(os.path.join(data_root, uncertainty_model_name+ "_" + experiment_name  + '_uncertainty_train_outputs.npz'))
 out_of_distribution_results_path = os.path.join(results_dir, uncertainty_model_name+ "_" + experiment_name +'_stat_results.txt')
 

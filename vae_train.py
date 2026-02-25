@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from utils import Logger,compute_ood_metrics,GaussianNormalizer,RangeNormalizer
 
 # from model import get_model, MODELS
-from model import EABlockFNO, EABlockCNN,CompoundModel
+from model import CompoundModel
 from eaae_model import EAAE
 from vae import VAE_CNN, Freq_FNO
 from resnet import BasicBlock, Bottleneck, ResNet 
@@ -76,7 +76,7 @@ if not os.path.exists(results_dir):
 if not os.path.exists(models_dir):
     os.makedirs(models_dir)
 
-fast_test = True  # Set to True for faster benchmarking with a smaller dataset
+fast_test = False  # Set to True for faster benchmarking with a smaller dataset
 use_old_uncertainty_model = True
 
 
@@ -246,13 +246,13 @@ if __name__ == '__main__':
             print(f'Epoch [{epoch}/{uncertainty_epochs}], Class Loss: {total_class_loss:.8f}')
             print(f'Epoch [{epoch}/{uncertainty_epochs}], Epi Loss: {total_epi_loss:.8f}')
             print(f'Epoch [{epoch}/{uncertainty_epochs}], Class Accuracy: {correct:.4f}')
-            # # Log epoch results
-            # result_logger.log({
-            #     'ep': epoch,
-            #     'train_class_loss': total_class_loss,
-            #     'train_correct': correct,
-            #     'train_epi_loss': total_epi_loss
-            # })
+            # Log epoch results
+            result_logger.log({
+                'ep': epoch,
+                'train_class_loss': total_class_loss,
+                'train_correct': correct,
+                'train_epi_loss': total_epi_loss
+            })
             # total_loss = total_class_loss + total_epi_loss
             # if total_loss < best_loss:
             #     best_loss = total_loss
