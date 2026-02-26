@@ -221,7 +221,7 @@ if __name__ == '__main__':
     print(f"Loading trained uncertainty model from {uncertainty_model_path}")
     uncertainty_model.load_state_dict(torch.load(uncertainty_model_path))
     uncertainty_model = uncertainty_model.to(device)
-    in_loader = train_loader  # Use the training set as in-distribution data
+    in_loader = test_loader  # Use the training set as in-distribution data
     out_loader = valid_loader  # Use the validation set (SVHN) as out-of-distribution data
     # Evaluate OOD detection performance
 

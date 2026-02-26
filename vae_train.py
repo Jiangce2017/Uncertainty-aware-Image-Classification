@@ -76,8 +76,8 @@ if not os.path.exists(results_dir):
 if not os.path.exists(models_dir):
     os.makedirs(models_dir)
 
-fast_test = False  # Set to True for faster benchmarking with a smaller dataset
-use_old_uncertainty_model = True
+fast_test = True  # Set to True for faster benchmarking with a smaller dataset
+use_old_uncertainty_model = False
 
 
 uncertainty_model_name = 'compound' #'eaCNN', 'eaae', 'eaFNO'
@@ -123,7 +123,7 @@ def load_dataset(dataset_name, data_root, batch_size, fast_test=False):
                                       transform=transforms.ToTensor())
     if fast_test:
         ### randomly select a subset of the dataset for faster benchmarking
-        train_dataset = torch.utils.data.Subset(train_dataset, range(1024))
+        train_dataset = torch.utils.data.Subset(train_dataset, range(512))
         # test_dataset = torch.utils.data.Subset(test_dataset, np.random.choice(len(test_dataset), size=128, replace=False))
         # valid_dataset = torch.utils.data.Subset(valid_dataset, np.random.choice(len(valid_dataset), size=128, replace=False))
     test_dataset = torch.utils.data.Subset(test_dataset, range(128))  # Use a subset for faster benchmarking
@@ -253,10 +253,10 @@ if __name__ == '__main__':
                 'train_correct': correct,
                 'train_epi_loss': total_epi_loss
             })
-            # total_loss = total_class_loss + total_epi_loss
-            # if total_loss < best_loss:
-            #     best_loss = total_loss
-            #     torch.save(uncertainty_model.state_dict(), uncertainty_model_path)
+            total_loss = total_class_loss + total_epi_loss
+            if total_loss < best_loss:
+                best_loss = total_loss
+            torch.save(uncertainty_model.state_dict(), uncertainty_model_path)
             # ### use the stored best model if the current epoch model is not the best
             # else:
             #     uncertainty_model.load_state_dict(torch.load(uncertainty_model_path))
