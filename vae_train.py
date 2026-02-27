@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from utils import Logger,compute_ood_metrics,GaussianNormalizer,RangeNormalizer
 
 # from model import get_model, MODELS
-from model import CompoundModel
+from model import CompoundModel,EABlockFNO
 from eaae_model import EAAE
 from vae import VAE_CNN, Freq_FNO
 from resnet import BasicBlock, Bottleneck, ResNet 
@@ -31,7 +31,7 @@ torch.manual_seed(0)
 
 ### Specify dataset
 
-dataset_name = 'cifar10' #'mnist', or fasion-mnst, or cifar10, or cifar100
+dataset_name = 'fashion-mnist' #'mnist', or fasion-mnst, or cifar10, or cifar100
 if dataset_name == 'fashion-mnist':
     im_x=28
     im_y=28
@@ -66,7 +66,7 @@ uncertainty_lr = 1e-4
 log_interval = 10
 classification_epochs = 5
 vae_epochs = 200
-uncertainty_epochs = 2000
+uncertainty_epochs = 200
 batch_size = 64
 data_root = '/ocean/projects/cis240139p/jchen39/datasets' 
 results_dir = Path("/jet/home/jchen39/projects/EAAE/results10")
@@ -76,17 +76,17 @@ if not os.path.exists(results_dir):
 if not os.path.exists(models_dir):
     os.makedirs(models_dir)
 
-fast_test = True  # Set to True for faster benchmarking with a smaller dataset
-use_old_uncertainty_model = False
+fast_test = False  # Set to True for faster benchmarking with a smaller dataset
+use_old_uncertainty_model = True
 
 
-uncertainty_model_name = 'compound' #'eaCNN', 'eaae', 'eaFNO'
+uncertainty_model_name = 'compound' #'eaCNN', 'eaae', 'eaFNO', 'compound'
 
 experiment_name = dataset_name+ "_"+ str(hidden_dim) + "_" + str(latent_dim)+"_"+str(modes1)+"_"+str(modes2)
 if fast_test:
     experiment_name += "_fast_test"
 
-uncertainty_model_initial_path = Path(os.path.join(models_dir, uncertainty_model_name+ "_" + experiment_name + "_best.pth"))
+uncertainty_model_initial_path = Path(os.path.join(models_dir, uncertainty_model_name+ "_" + experiment_name + ".pth"))
 uncertainty_model_path = Path(os.path.join(models_dir, uncertainty_model_name+ "_" + experiment_name +".pth"))
 
 uncertainty_train_outputs_path = Path(os.path.join(data_root, uncertainty_model_name+ "_" + experiment_name + '_uncertainty_train_outputs.npz'))
@@ -123,7 +123,7 @@ def load_dataset(dataset_name, data_root, batch_size, fast_test=False):
                                       transform=transforms.ToTensor())
     if fast_test:
         ### randomly select a subset of the dataset for faster benchmarking
-        train_dataset = torch.utils.data.Subset(train_dataset, range(512))
+        train_dataset = torch.utils.data.Subset(train_dataset, range(1024))
         # test_dataset = torch.utils.data.Subset(test_dataset, np.random.choice(len(test_dataset), size=128, replace=False))
         # valid_dataset = torch.utils.data.Subset(valid_dataset, np.random.choice(len(valid_dataset), size=128, replace=False))
     test_dataset = torch.utils.data.Subset(test_dataset, range(128))  # Use a subset for faster benchmarking
@@ -158,36 +158,6 @@ def train_classification_compound_with_uncertainty_model(model, optimizer, data_
     total_epi_loss /= (batch_idx+1)
     correct /= (len(data_loader.dataset))
     return total_class_loss, correct, total_epi_loss
-
-    #     if epoch % log_interval == 0:
-    #         print(f'Epoch [{epoch}/{uncertainty_epochs}], Class Loss: {total_class_loss / (batch_idx+1):.8f}')
-    #         print(f'Epoch [{epoch}/{uncertainty_epochs}], Epi Loss: {total_epi_loss / (batch_idx+1):.8f}')
-    #         print(f'Epoch [{epoch}/{uncertainty_epochs}], Class Accuracy: {correct / (len(data_loader.dataset)):.4f}')
-    #         ### Log epoch results
-    #         result_logger.log({
-    #             'ep': epoch,
-    #             'train_class_loss': total_class_loss / (batch_idx+1),
-    #             'train_correct': correct / (len(data_loader.dataset)),
-    #             'train_epi_loss': total_epi_loss / (batch_idx+1)
-    #         })
-    #         train_uncertainty = evaluate_classification_compound_with_uncertainty_model(model, train_loader, device, mode='train')
-    #         test_uncertainty = evaluate_classification_compound_with_uncertainty_model(model, test_loader, device, mode='test')
-    #         valid_uncertainty = evaluate_classification_compound_with_uncertainty_model(model, valid_loader, device, mode='valid')
-    #         train_scores = np.exp(-train_uncertainty)
-    #         test_scores = np.exp(-test_uncertainty)
-    #         valid_scores = np.exp(-valid_uncertainty)
-    #         metrics_train_test = compute_ood_metrics(train_scores, test_scores)
-    #         metrics_train_valid = compute_ood_metrics(train_scores, valid_scores)
-    #         metrics_test_valid = compute_ood_metrics(test_scores, valid_scores)
-    #         OOD_result_logger.log({
-    #             'ep': epoch,
-    #             'train_vs_test': metrics_train_test['AUROC'],
-    #             'train_vs_valid': metrics_train_valid['AUROC'],
-    #             'test_vs_valid': metrics_test_valid['AUROC']
-    #         })
-    #         uncertainty_model_path_epoch = Path(os.path.join(models_dir, uncertainty_model_name+ "_" + experiment_name + f"_epoch_{epoch}.pth"))
-    #         torch.save(model.state_dict(), uncertainty_model_path_epoch)
-    # torch.save(model.state_dict(), uncertainty_model_path)
 
 def evaluate_classification_compound_with_uncertainty_model(model, data_loader, device, mode='test'):
     model.eval()

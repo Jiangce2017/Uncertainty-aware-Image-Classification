@@ -32,7 +32,7 @@ if torch.cuda.is_available():
 else:
     device = 'cpu'  # Device to use: 'cpu' or 'cuda'
 
-dataset_name = 'cifar10' #'mnist', or fasion-mnst, or cifar10, or cifar100
+dataset_name = 'fashion-mnist' #'mnist', or fasion-mnst, or cifar10, or cifar100
 if dataset_name == 'fashion-mnist':
     im_x=28
     im_y=28
@@ -113,8 +113,9 @@ def evaluate_ood_detection(model, in_loader, out_loader, device):
             outputs, mid_value, sph_err = model(data)
             class_loss = F.cross_entropy(outputs[:,:,0,0], labels)
             pred = outputs[:,:,0,0].argmax(dim=1, keepdim=True)
-            correct_mask = labels.eq(pred.view_as(labels))
-            epi_loss = torch.mean(sph_err[correct_mask],dim=(1,2,3)) + torch.mean((mid_value[correct_mask]-outputs[correct_mask])**2,dim=(1,2,3))
+            #correct_mask = labels.eq(pred.view_as(labels))
+            #filter_threshold = 0.26  # This threshold can be tuned based on the distribution of epi_loss
+            epi_loss = torch.mean(sph_err,dim=(1,2,3)) + torch.mean((mid_value-outputs)**2,dim=(1,2,3))
             total_class_loss += class_loss.item()
             total_epi_loss += torch.mean(epi_loss).item()
             pred = outputs.argmax(dim=1, keepdim=True)
