@@ -79,10 +79,10 @@ if not os.path.exists(models_dir):
 fast_test = False  # Set to True for faster benchmarking with a smaller dataset
 use_old_uncertainty_model = True
 
-
+classifier_name = 'vgg'#'resnet', 'vgg', 'densenet'
 uncertainty_model_name = 'compound' #'eaCNN', 'eaae', 'eaFNO', 'compound'
 
-experiment_name = dataset_name+ "_"+ str(hidden_dim) + "_" + str(latent_dim)+"_"+str(modes1)+"_"+str(modes2)
+experiment_name = classifier_name + "_" + dataset_name+ "_"+ str(hidden_dim) + "_" + str(latent_dim)+"_"+str(modes1)+"_"+str(modes2)
 if fast_test:
     experiment_name += "_fast_test"
 
@@ -199,7 +199,7 @@ if __name__ == '__main__':
     elif uncertainty_model_name == 'eaae':
         uncertainty_model = EAAE(batch_size,device,im_x, im_y, hidden_dim, latent_dim, input_channels,num_classes, modes1, modes2)
     elif uncertainty_model_name == 'compound':
-        uncertainty_model = CompoundModel(im_x, im_y, hidden_dim, num_classes, input_channels, modes1, modes2)
+        uncertainty_model = CompoundModel(classifier_name, im_x, im_y, hidden_dim, num_classes, input_channels, modes1, modes2)
     ## if trained uncertainty model exists, load it
     if uncertainty_model_initial_path.exists() and use_old_uncertainty_model:
         print(f"Loading trained uncertainty model from {uncertainty_model_initial_path}")

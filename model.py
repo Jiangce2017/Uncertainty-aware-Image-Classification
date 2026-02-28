@@ -144,12 +144,16 @@ class EABlockFNO(nn.Module):
         return K
 
 class CompoundModel(nn.Module):
-    def __init__(self, im_x=28, im_y=28, hidden_dim=8, epi_channels=10, input_channels=1, modes1=14, modes2=8, norm_layer=None):
+    def __init__(self, classifier_name, im_x=28, im_y=28, hidden_dim=8, epi_channels=10, input_channels=1, modes1=14, modes2=8, norm_layer=None):
         super(CompoundModel, self).__init__()
         block = Bottleneck
         num_blocks = [3, 4, 6, 3]
-        #self.classifier = ResNet(block, num_blocks, input_channels=input_channels, num_classes=epi_channels)
-        self.classifier = ResNet(block, num_blocks, input_channels=1, num_classes=epi_channels)
+        if classifier_name == 'resnet':
+            self.classifier = ResNet(block, num_blocks, input_channels=input_channels, num_classes=epi_channels)
+        elif classifier_name == 'vgg':
+            self.classifier = VGG(input_channels=input_channels, output_channels=epi_channels, im_x=im_x, im_y=im_y, norm_layer=norm_layer)
+        elif classifier_name == 'densenet':
+            self.classifier = DenseNet(input_channels=input_channels, output_channels=epi_channels)
         self.input_channels = input_channels
         self.modes1 = modes1 
         self.modes2 = modes2
@@ -186,7 +190,7 @@ class CompoundModel(nn.Module):
     def forward(self, x):
         #print("x shape:", x.shape)
         #x = x[:,:1,:,:]  # only use the first channel (a(x,y)) as input to the ResNet classifier
-        outputs, _ = self.classifier(x)
+        outputs = self.classifier(x)
         outputs = outputs[:,:,None,None]
         features = torch.sigmoid(outputs)  # ensure the output is in the range [0, 1]
         device = x.device
@@ -493,8 +497,8 @@ class LeNet5(nn.Module):
         return x
 
 class VGG(nn.Module):
-    """VGG-style network for MNIST"""
-    def __init__(self, input_channels=1, output_channels=10, norm_layer=None):
+    """VGG-style network for MNIST and CIFAR-10"""
+    def __init__(self, input_channels=1, output_channels=10, im_x=28, im_y=28, norm_layer=None):
         super(VGG, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -529,9 +533,11 @@ class VGG(nn.Module):
             nn.MaxPool2d(kernel_size=2, stride=2),
         )
         
+        comdensed_im_x = im_x // 8  # After 3 max-pool layers
+        comdensed_im_y = im_y // 8  # After 3 max-pool layers
         self.classifier = nn.Sequential(
             nn.Dropout(0.5),
-            nn.Linear(128 * 3 * 3, 512, bias=False),
+            nn.Linear(128 * comdensed_im_x * comdensed_im_y, 512, bias=False),
             nn.BatchNorm1d(512),
             nn.ReLU(inplace=True),
             nn.Dropout(0.5),

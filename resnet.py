@@ -106,7 +106,7 @@ class ResNet(nn.Module):
         out = out.view(out.size(0), -1)
         features = self.linear_features(out)
         out = self.linear(features)
-        return out, features
+        return out
     
 def resnet18():
     """ return a ResNet 18 object
