@@ -79,7 +79,7 @@ if not os.path.exists(models_dir):
 fast_test = False  # Set to True for faster benchmarking with a smaller dataset
 use_old_uncertainty_model = True
 
-classifier_name = 'vgg'#'resnet', 'vgg', 'densenet'
+classifier_name = 'vgg'#'resnet', 'vgg', 'densenet', 'vit'
 uncertainty_model_name = 'compound' #'eaCNN', 'eaae', 'eaFNO', 'compound'
 
 experiment_name = classifier_name + "_" + dataset_name+ "_"+ str(hidden_dim) + "_" + str(latent_dim)+"_"+str(modes1)+"_"+str(modes2)
@@ -116,8 +116,14 @@ def load_dataset(dataset_name, data_root, batch_size, fast_test=False):
         test_dataset = datasets.FashionMNIST(root=data_root, train=False, transform=transforms.ToTensor())
         valid_dataset = datasets.MNIST(root=data_root, train=False, transform=transforms.ToTensor())
     elif dataset_name == 'cifar10':
+        ## apply image transforms for data augmentation during training
+        transform_train = transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomCrop(32, padding=4),
+            transforms.ToTensor(),
+        ])
         train_dataset = datasets.CIFAR10(root=data_root, train=True, download=True,
-                                         transform=transforms.ToTensor())
+                                         transform=transform_train)
         test_dataset = datasets.CIFAR10(root=data_root, train=False, transform=transforms.ToTensor())
         valid_dataset = datasets.SVHN(root=data_root, split='test', download=True,
                                       transform=transforms.ToTensor())

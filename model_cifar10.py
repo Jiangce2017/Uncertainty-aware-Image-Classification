@@ -6,6 +6,7 @@ import numpy as np
 from resnet import BasicBlock, Bottleneck, ResNet 
 from densenet import densenet121
 from vgg_cifar10 import vgg13_bn
+from vit import ViT
 
 class EABlockFNO(nn.Module):
     def __init__(self, im_x=28, im_y=28, hidden_dim=8, epi_channels=10, input_channels=1, modes1=14, modes2=8, norm_layer=None):
@@ -156,6 +157,8 @@ class CompoundModel(nn.Module):
             self.classifier = vgg13_bn(pretrained=False, progress=True, device=device)
         elif classifier_name == 'densenet':
             self.classifier = densenet121(pretrained=False, progress=True, device=device)
+        elif classifier_name == 'vit':
+            self.classifier = ViT()
         self.input_channels = input_channels
         self.modes1 = modes1 
         self.modes2 = modes2
@@ -168,7 +171,8 @@ class CompoundModel(nn.Module):
         self.activation_function = nn.LeakyReLU(0.2)
         self.complex_activation_function = ComplexReLU(0.2)
         #self.epi_p = LocalMLP_Complex(epi_channels//2,hidden_dim, self.modes1, self.modes2)
-        self.epi_p = nn.Linear(input_channels, self.epi_hidden_dim)
+        #self.epi_p = nn.Linear(input_channels, self.epi_hidden_dim)
+        self.epi_p = FNO_MLP(input_channels, self.epi_hidden_dim, self.epi_hidden_dim*2)
         self.epi_conv0 = SpectralConv2d(self.epi_hidden_dim, self.epi_hidden_dim, self.modes1, self.modes2)
         self.epi_conv1 = SpectralConv2d(self.epi_hidden_dim, self.epi_hidden_dim, self.modes1, self.modes2)
         self.epi_conv2 = SpectralConv2d(self.epi_hidden_dim, self.epi_hidden_dim, self.modes1, self.modes2)
@@ -194,7 +198,8 @@ class CompoundModel(nn.Module):
         #x = x[:,:1,:,:]  # only use the first channel (a(x,y)) as input to the ResNet classifier
         outputs = self.classifier(x)
         outputs = outputs[:,:,None,None]
-        features = torch.sigmoid(outputs)  # ensure the output is in the range [0, 1]
+        features = outputs
+        #features = torch.sigmoid(outputs)  # ensure the output is in the range [0, 1]
         device = x.device
         # latent_dim = features.shape[1]
         # epsilon_real = torch.randn(features.shape[0], latent_dim//2, self.modes1, self.modes2).to(device)* 1e-5
@@ -203,9 +208,9 @@ class CompoundModel(nn.Module):
         # z_image = features[:,latent_dim//2:,:,:] + epsilon_image
         # z = torch.complex(z_real, z_image)
 
-        x = x.permute(0, 2, 3, 1)
-        x = self.epi_p(x)
-        x = x.permute(0, 3, 1, 2)
+        #x = x.permute(0, 2, 3, 1)
+        x = self.epi_p(x)  # only use the first channel (a(x,y)) as input to the FNO block
+        #x = x.permute(0, 3, 1, 2)
 
         # x = self.complex_activation_function(self.epi_p(z))
         # x = torch.fft.irfft2(x, s=(self.output_im_x, self.output_im_y),dim=(-2,-1))
