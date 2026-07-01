@@ -20,8 +20,7 @@ class EABlockFNO(nn.Module):
         self.epi_hidden_dim = hidden_dim
         self.epi_channels = epi_channels
         self.activation_function = nn.LeakyReLU(0.2)
-        #self.epi_p = nn.Linear(self.input_channels, self.epi_hidden_dim) # input channel is 3: (a(x, y), x, y)
-        self.epi_p = nn.Linear(1, self.epi_hidden_dim)
+        self.epi_p = nn.Linear(self.input_channels, self.epi_hidden_dim) # input channel is 3: (a(x, y), x, y)
         self.epi_conv0 = SpectralConv2d(self.epi_hidden_dim, self.epi_hidden_dim, self.modes1, self.modes2)
         self.epi_conv1 = SpectralConv2d(self.epi_hidden_dim, self.epi_hidden_dim, self.modes1, self.modes2)
         self.epi_conv2 = SpectralConv2d(self.epi_hidden_dim, self.epi_hidden_dim, self.modes1, self.modes2)
@@ -43,8 +42,10 @@ class EABlockFNO(nn.Module):
         self.epi_q = FNO_MLP(self.epi_hidden_dim, self.epi_channels, self.epi_hidden_dim*2)
 
     def forward(self, x, features):
-        x = x[:,:1,:,:]  # only use the first channel (a(x,y)) as input to the FNO block
-        x = x.permute(0, 2, 3, 1)
+        if len(x.shape) == 4:
+            x = x.permute(0, 2, 3, 1)
+        elif len(x.shape) == 3:
+            x = x.unsqueeze(-1)
         x = self.activation_function(self.epi_p(x))
         x = x.permute(0, 3, 1, 2)
         x1 = self.epi_conv0(x)
